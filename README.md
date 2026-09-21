@@ -24,13 +24,13 @@ Next.js 14 (App Router) · TypeScript · Tailwind · Prisma · Postgres (Neon/Su
    npm run prisma:migrate
    npm run dev
    ```
-4. Visit `/api/ghl/install` to start the install flow against your dev HighLevel agency.
+4. Visit `/api/connect/install` to start the install flow against your dev HighLevel agency.
 
 ## Key flows
 
-- **Install:** `GET /api/ghl/install` → HighLevel consent → `GET /api/ghl/callback` (exchanges the code, stores encrypted tokens, pulls installed locations, seeds sync runs, routes to onboarding or the dashboard).
+- **Install:** `GET /api/connect/install` → HighLevel consent → `GET /api/connect/callback` (exchanges the code, stores encrypted tokens, pulls installed locations, seeds sync runs, routes to onboarding or the dashboard).
 - **Sync:** triggered by the post-install seed, an in-process 15-minute interval started from `src/instrumentation.ts` (Hostinger's Node.js Web Apps Hosting has no cron product, but does run a persistent Node process, so the process schedules its own sync work — see below), the `/api/cron/sync` route as a manual/external-trigger fallback, or the dashboard's "Refresh Now" button (`/api/sync/trigger` + `/api/sync/status`). See `src/server/sync/runSync.ts` — each invocation processes a bounded amount of work and resumes from a persisted cursor next time.
-- **Webhooks:** `POST /api/ghl/webhook` verifies the Ed25519 signature, dedupes by `webhookId`, and handles `AppUninstall` / `LocationCreate` / `LocationUpdate`.
+- **Webhooks:** `POST /api/connect/webhook` verifies the Ed25519 signature, dedupes by `webhookId`, and handles `AppUninstall` / `LocationCreate` / `LocationUpdate`.
 - **Dashboard:** `src/app/(dashboard)/dashboard/page.tsx` — portfolio stat tiles + per-client health table, computed in `src/lib/aggregate.ts` with a placeholder scoring function in `src/lib/health.ts`.
 
 ## Deploying to Hostinger
@@ -41,7 +41,7 @@ This app deploys via Hostinger's **Node.js Web Apps Hosting** (hPanel → Websit
 2. **Database** — provision a free Postgres instance on [Neon](https://neon.tech) (recommended) or [Supabase](https://supabase.com). Neon gives you both a pooled connection string (`DATABASE_URL`) and a direct one (`DIRECT_URL`) out of the box; Supabase's connection page has the same split.
 3. **Environment variables** — in the "Environment Variables" step of the import flow (or later under the site's settings), add every var from `.env.example`, with production values:
    - `DATABASE_URL`, `DIRECT_URL` — from step 2
-   - `GHL_CLIENT_ID`, `GHL_CLIENT_SECRET`, `GHL_REDIRECT_URI` (`https://<your-domain>/api/ghl/callback`), `GHL_API_BASE_URL`, `GHL_API_VERSION`, `GHL_SCOPES`, `GHL_WEBHOOK_PUBLIC_KEY`
+   - `GHL_CLIENT_ID`, `GHL_CLIENT_SECRET`, `GHL_REDIRECT_URI` (`https://<your-domain>/api/connect/callback`), `GHL_API_BASE_URL`, `GHL_API_VERSION`, `GHL_SCOPES`, `GHL_WEBHOOK_PUBLIC_KEY`
    - `TOKEN_ENCRYPTION_KEY`, `NEXTAUTH_SECRET` — each `openssl rand -base64 32`
    - `NEXTAUTH_URL` (`https://<your-domain>`)
    - `EMAIL_SERVER`, `EMAIL_FROM`, `CRON_SECRET`, `SYNC_LOOKBACK_DAYS`

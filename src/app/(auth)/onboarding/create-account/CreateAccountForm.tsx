@@ -43,7 +43,7 @@ export function CreateAccountForm() {
     return (
       <Card className="w-full max-w-sm p-8 text-sm text-muted-foreground">
         Missing agency context. Start from{" "}
-        <a href="/api/ghl/install" className="underline">
+        <a href="/api/connect/install" className="underline">
           the install flow
         </a>
         .

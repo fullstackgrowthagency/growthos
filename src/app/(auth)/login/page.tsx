@@ -43,7 +43,7 @@ export default function LoginPage() {
 
         <p className="mt-6 text-xs text-muted-foreground">
           Not installed on HighLevel yet?{" "}
-          <a href="/api/ghl/install" className="underline">
+          <a href="/api/connect/install" className="underline">
             Install GrowthOS
           </a>
         </p>
