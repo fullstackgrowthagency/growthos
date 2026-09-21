@@ -6,7 +6,7 @@ This is **phase 1**: GHL Marketplace OAuth install, data sync from sub-accounts,
 
 ## Stack
 
-Next.js 14 (App Router) · TypeScript · Tailwind · Prisma · Postgres · NextAuth (email magic link) · deployed on Vercel.
+Next.js 14 (App Router) · TypeScript · Tailwind · Prisma · Postgres (Neon/Supabase) · NextAuth (email magic link) · deployed on **Hostinger Node.js Web Apps Hosting**.
 
 ## Local setup
 
@@ -29,9 +29,26 @@ Next.js 14 (App Router) · TypeScript · Tailwind · Prisma · Postgres · NextA
 ## Key flows
 
 - **Install:** `GET /api/ghl/install` → HighLevel consent → `GET /api/ghl/callback` (exchanges the code, stores encrypted tokens, pulls installed locations, seeds sync runs, routes to onboarding or the dashboard).
-- **Sync:** triggered by the post-install seed, a 15-minute Vercel Cron (`/api/cron/sync`, see `vercel.json`), or the dashboard's "Refresh Now" button (`/api/sync/trigger` + `/api/sync/status`). See `src/server/sync/runSync.ts` — each invocation processes a bounded amount of work and resumes from a persisted cursor next time, so it works within serverless time limits without a separate worker process.
+- **Sync:** triggered by the post-install seed, an in-process 15-minute interval started from `src/instrumentation.ts` (Hostinger's Node.js Web Apps Hosting has no cron product, but does run a persistent Node process, so the process schedules its own sync work — see below), the `/api/cron/sync` route as a manual/external-trigger fallback, or the dashboard's "Refresh Now" button (`/api/sync/trigger` + `/api/sync/status`). See `src/server/sync/runSync.ts` — each invocation processes a bounded amount of work and resumes from a persisted cursor next time.
 - **Webhooks:** `POST /api/ghl/webhook` verifies the Ed25519 signature, dedupes by `webhookId`, and handles `AppUninstall` / `LocationCreate` / `LocationUpdate`.
 - **Dashboard:** `src/app/(dashboard)/dashboard/page.tsx` — portfolio stat tiles + per-client health table, computed in `src/lib/aggregate.ts` with a placeholder scoring function in `src/lib/health.ts`.
+
+## Deploying to Hostinger
+
+This app deploys via Hostinger's **Node.js Web Apps Hosting** (hPanel → Websites → Add Website → Node.js web app → Import Git repository), a Git-connected build/deploy flow (not a VPS). It runs a real persistent Next.js server, but has no built-in Postgres and no cron/scheduled-jobs product for this hosting type — both are handled as described above and below.
+
+1. **Connect the repo** — in hPanel, import `fullstackgrowthagency/growthos`, branch `main`. Framework preset "Next.js", Node 22.x, and default build/output settings are auto-detected correctly; nothing to change there.
+2. **Database** — provision a free Postgres instance on [Neon](https://neon.tech) (recommended) or [Supabase](https://supabase.com). Neon gives you both a pooled connection string (`DATABASE_URL`) and a direct one (`DIRECT_URL`) out of the box; Supabase's connection page has the same split.
+3. **Environment variables** — in the "Environment Variables" step of the import flow (or later under the site's settings), add every var from `.env.example`, with production values:
+   - `DATABASE_URL`, `DIRECT_URL` — from step 2
+   - `GHL_CLIENT_ID`, `GHL_CLIENT_SECRET`, `GHL_REDIRECT_URI` (`https://<your-domain>/api/ghl/callback`), `GHL_API_BASE_URL`, `GHL_API_VERSION`, `GHL_SCOPES`, `GHL_WEBHOOK_PUBLIC_KEY`
+   - `TOKEN_ENCRYPTION_KEY`, `NEXTAUTH_SECRET` — each `openssl rand -base64 32`
+   - `NEXTAUTH_URL` (`https://<your-domain>`)
+   - `EMAIL_SERVER`, `EMAIL_FROM`, `CRON_SECRET`, `SYNC_LOOKBACK_DAYS`
+4. **Deploy** — the build runs `npm install` (which runs `postinstall` → `prisma generate`) then `npm run build`. This does **not** run migrations. After the first successful deploy, run `npx prisma migrate deploy` once from a machine that can reach the production database (using the same `DATABASE_URL`/`DIRECT_URL`) to create the schema.
+5. **Domain** — works immediately on the free `*.hostingersite.com` subdomain Hostinger assigns; attach a custom domain in hPanel for production use (automatic SSL either way). Update `GHL_REDIRECT_URI` and `NEXTAUTH_URL` if the domain changes after the HighLevel app is already registered.
+6. **HighLevel app** — register (or update) a Marketplace app in the HighLevel developer portal with the redirect URI pointed at the live domain, then run a real install end-to-end.
+7. **Confirm the in-process scheduler is actually running** — check that `SyncRun` rows advance roughly every 15 minutes with no external trigger (see `src/instrumentation.ts`). If the platform ever recycles the process faster than that interval, sync still catches up via the resumable cursor design; nothing to lose.
 
 ## Explicitly out of scope for phase 1
 
