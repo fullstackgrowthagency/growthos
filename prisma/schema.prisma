@@ -1,0 +1,357 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  CSM
+  ADS
+  SALES
+  VIEWER
+}
+
+enum InstallStatus {
+  ACTIVE
+  UNINSTALLED
+}
+
+enum LocationStatus {
+  ACTIVE
+  REMOVED
+}
+
+enum OpportunityStatus {
+  OPEN
+  WON
+  LOST
+  ABANDONED
+}
+
+enum AppointmentStatus {
+  BOOKED
+  CONFIRMED
+  SHOWED
+  NOSHOW
+  CANCELLED
+}
+
+enum PaymentStatus {
+  SUCCEEDED
+  PENDING
+  FAILED
+  REFUNDED
+}
+
+enum SyncEntity {
+  CONTACTS
+  OPPORTUNITIES
+  APPOINTMENTS
+  PAYMENTS
+  LOCATIONS
+}
+
+enum SyncStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  PARTIAL
+}
+
+model Agency {
+  id           String   @id @default(cuid())
+  ghlCompanyId String   @unique
+  name         String
+  timezone     String   @default("UTC")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  installation GhlInstallation?
+  locations    Location[]
+  users        User[]
+  syncRuns     SyncRun[]
+}
+
+/// Forward-compatible even though phase 1 only ever seeds one OWNER user.
+/// emailVerified/image/accounts/sessions exist to satisfy NextAuth's
+/// PrismaAdapter contract (needed for the Email magic-link provider),
+/// not because GrowthOS itself uses them for anything beyond auth.
+model User {
+  id            String    @id @default(cuid())
+  agencyId      String
+  agency        Agency    @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  name          String?
+  role          Role      @default(OWNER)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  locationAccess UserLocationAccess[]
+  accounts       Account[]
+  sessions       Session[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expires      DateTime
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+/// Unused by phase-1 logic; present so per-user sub-account assignment
+/// (CSM / ads / sales dashboards) doesn't require a migration later.
+model UserLocationAccess {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  role       Role
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, locationId])
+}
+
+model GhlInstallation {
+  id                 String        @id @default(cuid())
+  agencyId           String        @unique
+  agency             Agency        @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  ghlCompanyId       String
+  ghlInstallerUserId String?
+  accessTokenEnc     String
+  refreshTokenEnc    String
+  scope              String
+  status             InstallStatus @default(ACTIVE)
+  expiresAt          DateTime
+  installedAt        DateTime      @default(now())
+  uninstalledAt      DateTime?
+  /// Simple lock to avoid two concurrent callers both refreshing (and
+  /// rotating out) the refresh token at the same time.
+  isRefreshing       Boolean       @default(false)
+  updatedAt          DateTime      @updatedAt
+}
+
+model Location {
+  id            String         @id @default(cuid())
+  agencyId      String
+  agency        Agency         @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  ghlLocationId String         @unique
+  name          String
+  timezone      String         @default("UTC")
+  status        LocationStatus @default(ACTIVE)
+  installedAt   DateTime       @default(now())
+  removedAt     DateTime?
+  lastSyncedAt  DateTime?
+
+  token         LocationToken?
+  contacts      Contact[]
+  opportunities Opportunity[]
+  appointments  Appointment[]
+  payments      Payment[]
+  adSpend       AdSpend[]
+  userAccess    UserLocationAccess[]
+  syncRuns      SyncRun[]
+
+  @@index([agencyId])
+}
+
+model LocationToken {
+  id             String   @id @default(cuid())
+  locationId     String   @unique
+  location       Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  accessTokenEnc String
+  expiresAt      DateTime
+  mintedAt       DateTime @default(now())
+}
+
+model Contact {
+  id            String    @id @default(cuid())
+  agencyId      String
+  locationId    String
+  location      Location  @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  ghlContactId  String
+  firstName     String?
+  lastName      String?
+  email         String?
+  phone         String?
+  source        String?
+  tags          String[]  @default([])
+  dateAddedGhl  DateTime?
+  /// Full untouched GHL payload — lets future features (health scoring,
+  /// AI analyst) mine fields without a re-sync.
+  raw           Json?
+  firstSyncedAt DateTime  @default(now())
+  lastSyncedAt  DateTime  @updatedAt
+
+  opportunities Opportunity[]
+  appointments  Appointment[]
+  payments      Payment[]
+
+  @@unique([locationId, ghlContactId])
+  @@index([agencyId])
+  @@index([locationId, dateAddedGhl])
+}
+
+model Opportunity {
+  id                String            @id @default(cuid())
+  agencyId          String
+  locationId        String
+  location          Location          @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  contactId         String?
+  contact           Contact?          @relation(fields: [contactId], references: [id])
+  ghlOpportunityId  String
+  name              String
+  pipelineId        String?
+  pipelineName      String?
+  stageId           String?
+  stageName         String?
+  monetaryValue     Decimal           @default(0)
+  status            OpportunityStatus @default(OPEN)
+  source            String?
+  assignedGhlUserId String?
+  createdAtGhl      DateTime?
+  updatedAtGhl      DateTime?
+  raw               Json?
+  lastSyncedAt      DateTime          @updatedAt
+
+  @@unique([locationId, ghlOpportunityId])
+  @@index([agencyId])
+  @@index([locationId, status])
+}
+
+model Appointment {
+  id                String            @id @default(cuid())
+  agencyId          String
+  locationId        String
+  location          Location          @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  contactId         String?
+  contact           Contact?          @relation(fields: [contactId], references: [id])
+  ghlAppointmentId  String
+  calendarId        String?
+  title             String?
+  startTime         DateTime
+  endTime           DateTime?
+  status            AppointmentStatus @default(BOOKED)
+  assignedGhlUserId String?
+  raw               Json?
+  lastSyncedAt      DateTime          @updatedAt
+
+  @@unique([locationId, ghlAppointmentId])
+  @@index([agencyId])
+  @@index([locationId, startTime])
+}
+
+model Payment {
+  id               String        @id @default(cuid())
+  agencyId         String
+  locationId       String
+  location         Location      @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  contactId        String?
+  contact          Contact?      @relation(fields: [contactId], references: [id])
+  ghlTransactionId String
+  amount           Decimal
+  currency         String        @default("USD")
+  status           PaymentStatus @default(SUCCEEDED)
+  /// order | invoice | subscription
+  source           String?
+  occurredAt       DateTime
+  raw              Json?
+  lastSyncedAt     DateTime      @updatedAt
+
+  @@unique([locationId, ghlTransactionId])
+  @@index([agencyId])
+  @@index([locationId, occurredAt])
+}
+
+/// GHL's API does not expose ad spend, so average CPL needs this minimal
+/// manual input rather than a fabricated number.
+model AdSpend {
+  id         String   @id @default(cuid())
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  /// First-of-month marker, e.g. 2026-09-01.
+  month      DateTime
+  amount     Decimal
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([locationId, month])
+}
+
+model SyncRun {
+  id            String     @id @default(cuid())
+  agencyId      String
+  agency        Agency     @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  locationId    String?
+  location      Location?  @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  entity        SyncEntity
+  status        SyncStatus @default(PENDING)
+  /// Resumability: next-page token, startAfterId, or timestamp cursor.
+  cursor        Json?
+  recordsSynced Int        @default(0)
+  errorMessage  String?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime   @default(now())
+
+  @@index([agencyId, status])
+  @@index([locationId, entity, status])
+}
+
+/// One row per outbound GHL API call, used by the rate limiter to compute
+/// a sliding-window count per agency. Pruned opportunistically as it's read.
+model RateLimitTick {
+  id         String   @id @default(cuid())
+  agencyId   String
+  occurredAt DateTime @default(now())
+
+  @@index([agencyId, occurredAt])
+}
+
+model WebhookEvent {
+  id           String    @id @default(cuid())
+  ghlWebhookId String    @unique
+  type         String
+  payload      Json
+  receivedAt   DateTime  @default(now())
+  processedAt  DateTime?
+  /// received | processed | failed
+  status       String    @default("received")
+}

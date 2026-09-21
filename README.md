@@ -1,0 +1,46 @@
+# GrowthOS
+
+Agency Intelligence for HighLevel — one screen for your whole client portfolio.
+
+This is **phase 1**: GHL Marketplace OAuth install, data sync from sub-accounts, and a single-owner Agency Dashboard. See `/root/.claude/plans/i-want-to-create-moonlit-clover.md` (or your own copy of the plan) for the full phase 1 scope and the longer-term roadmap (RBAC, AI analyst, morning brief, multi-factor health scoring) this schema is designed to grow into.
+
+## Stack
+
+Next.js 14 (App Router) · TypeScript · Tailwind · Prisma · Postgres · NextAuth (email magic link) · deployed on Vercel.
+
+## Local setup
+
+1. **Database** — `docker compose up -d` starts a local Postgres. Or point `DATABASE_URL`/`DIRECT_URL` at Neon/Supabase.
+2. **Env** — copy `.env.example` to `.env` and fill in:
+   - `TOKEN_ENCRYPTION_KEY` — generate with `openssl rand -base64 32`
+   - `NEXTAUTH_SECRET` — generate with `openssl rand -base64 32`
+   - `GHL_CLIENT_ID` / `GHL_CLIENT_SECRET` / `GHL_REDIRECT_URI` — from a dev app in the [HighLevel developer portal](https://marketplace.gohighlevel.com/). Since the OAuth callback needs a public HTTPS URL, point `GHL_REDIRECT_URI` at an ngrok/Cloudflare Tunnel URL during local dev (HighLevel has no separate API sandbox — you test against a real trial agency).
+   - `GHL_WEBHOOK_PUBLIC_KEY` — HighLevel's published Ed25519 public key for verifying webhook signatures.
+   - `EMAIL_SERVER` / `EMAIL_FROM` — SMTP creds (e.g. Resend) for magic-link sign-in.
+   - `CRON_SECRET` — any random string; must match what you send as `Authorization: Bearer <CRON_SECRET>` when hitting `/api/cron/sync` locally.
+3. **Install & migrate:**
+   ```bash
+   npm install
+   npm run prisma:migrate
+   npm run dev
+   ```
+4. Visit `/api/ghl/install` to start the install flow against your dev HighLevel agency.
+
+## Key flows
+
+- **Install:** `GET /api/ghl/install` → HighLevel consent → `GET /api/ghl/callback` (exchanges the code, stores encrypted tokens, pulls installed locations, seeds sync runs, routes to onboarding or the dashboard).
+- **Sync:** triggered by the post-install seed, a 15-minute Vercel Cron (`/api/cron/sync`, see `vercel.json`), or the dashboard's "Refresh Now" button (`/api/sync/trigger` + `/api/sync/status`). See `src/server/sync/runSync.ts` — each invocation processes a bounded amount of work and resumes from a persisted cursor next time, so it works within serverless time limits without a separate worker process.
+- **Webhooks:** `POST /api/ghl/webhook` verifies the Ed25519 signature, dedupes by `webhookId`, and handles `AppUninstall` / `LocationCreate` / `LocationUpdate`.
+- **Dashboard:** `src/app/(dashboard)/dashboard/page.tsx` — portfolio stat tiles + per-client health table, computed in `src/lib/aggregate.ts` with a placeholder scoring function in `src/lib/health.ts`.
+
+## Explicitly out of scope for phase 1
+
+Per-user RBAC/assignment UI, AI analyst chat, AI morning brief, the full multi-factor Client Health Score engine, per-sub-account drill-down dashboards, embedded GHL Custom Pages, and Marketplace listing/review submission. The `User`/`UserLocationAccess` schema and the `raw Json` columns on synced entities exist so these are additive later without a rewrite.
+
+## Verification checklist
+
+- [ ] OAuth: real install against a trial HighLevel agency; confirm `Agency`/`GhlInstallation`/`Location` rows via `npm run prisma:studio`; confirm token fields are ciphertext.
+- [ ] Token refresh: backdate `GhlInstallation.expiresAt`, confirm the next call refreshes and rotates the stored refresh token.
+- [ ] Sync correctness: seed known records in the GHL UI for one location, sync, compare against what lands in Postgres; add a record, re-sync, confirm no duplicates.
+- [ ] Webhooks: use the Marketplace app's test-send to fire `LocationCreate`/`AppUninstall`; confirm signature verification and dedupe.
+- [ ] Dashboard accuracy: compute expected totals via direct SQL for a fixed range and compare to what renders.
